@@ -145,7 +145,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-white font-sans selection:bg-blue-500 selection:text-white pb-20">
+    <div className="min-h-screen bg-[#0f172a] text-white font-sans selection:bg-blue-500 selection:text-white flex flex-col">
       {/* Header */}
       <header className="bg-[#1e293b] border-b border-gray-700 sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -183,7 +183,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+      <main className="max-w-5xl mx-auto px-4 py-8 space-y-8 flex-grow w-full">
         
         {/* Input Section - Swaps based on Tab */}
         <section className="bg-gray-800 rounded-xl border border-gray-700 p-6 shadow-xl relative overflow-hidden transition-all">
@@ -348,6 +348,12 @@ export default function App() {
         </div>
 
       </main>
+
+      <footer className="w-full py-6 text-center border-t border-gray-800/50 mt-auto bg-[#0f172a]">
+        <p className="text-gray-600 text-sm font-medium tracking-widest uppercase opacity-70 cursor-default hover:text-gray-400 transition-colors">
+           Made by Dario
+        </p>
+      </footer>
     </div>
   );
 }
