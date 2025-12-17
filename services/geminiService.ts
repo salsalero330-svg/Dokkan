@@ -38,41 +38,43 @@ const sanitizeCharacter = (c: any): Character => {
   };
 };
 
-// Robust helper to extract JSON array from text mixed with citations like [1]
-const extractJsonArray = (text: string): string => {
+/**
+ * Aggressive JSON Cleaner
+ * 1. Extracts content from markdown code blocks
+ * 2. Finds the outer-most [] pair
+ * 3. Removes trailing commas which cause JSON.parse to fail
+ */
+const cleanJsonString = (text: string): string => {
   if (!text) return "[]";
 
-  // 1. Try to extract from Markdown code blocks first (Most reliable)
+  // 1. Extract from Markdown
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (codeBlockMatch) {
     text = codeBlockMatch[1];
   }
 
-  // 2. Find the start of a JSON array containing objects: look for "[ {" ignoring whitespace
-  const startMatch = text.match(/\[\s*\{/);
-  
-  if (startMatch && typeof startMatch.index !== 'undefined') {
-    const startIndex = startMatch.index;
-    const lastBracket = text.lastIndexOf(']');
-    if (lastBracket > startIndex) {
-        return text.substring(startIndex, lastBracket + 1);
-    }
-  }
+  // 2. Find outer brackets
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
 
-  // 3. Fallback: Find first '[' that is NOT a citation (e.g. avoid [1], [20])
-  // We look for '[' not followed by digits and ']'
-  const firstBracket = text.search(/\[(?!\d+\])/);
-  const lastBracket = text.lastIndexOf(']');
-
-  if (firstBracket !== -1 && lastBracket > firstBracket) {
-      const candidate = text.substring(firstBracket, lastBracket + 1);
-      // Only return if it looks like it contains objects
-      if (candidate.includes('{') && candidate.includes('}')) {
-          return candidate;
+  if (start === -1 || end === -1 || end <= start) {
+      // If strict array not found, try to be lenient if it looks like a list of objects
+      if (text.trim().startsWith('{') && text.trim().endsWith('}')) {
+          // Wrap single object in array
+          text = `[${text}]`;
+      } else {
+          return "[]";
       }
+  } else {
+      text = text.substring(start, end + 1);
   }
 
-  return "[]";
+  // 3. Remove trailing commas (e.g., "prop": "val", } -> "prop": "val" })
+  // Regex explanation: Match a comma, followed by whitespace, followed by closing brace or bracket.
+  // Replace with just the closing symbol.
+  text = text.replace(/,\s*([\]}])/g, '$1');
+
+  return text;
 };
 
 // Schema for Character Generation (Kept for reference/unused functions)
@@ -133,38 +135,37 @@ export const generateTeamFromInput = async (inputText: string): Promise<{ charac
     
     const response = await ai.models.generateContent({
       model,
-      contents: `The user wants to build a Dokkan Battle team with these specific characters: "${inputText}".
+      contents: `USER REQUEST: Build a Dokkan Battle team with these characters: "${inputText}".
       
-      Use Google Search to find the MOST RECENT and ACCURATE details.
+      INSTRUCTIONS:
+      1. Use Google Search to find stats for these specific units (prioritize newest versions).
+      2. Return a JSON Array of character objects.
+      3. NO conversational text. Output ONLY valid JSON.
       
-      IMPORTANT: Output the result as a raw JSON array inside a markdown code block.
-      
-      \`\`\`json
+      JSON STRUCTURE:
       [
         {
-          "id": "unique-string",
-          "name": "Character Name",
+          "id": "unique-id",
+          "name": "Name",
           "subtitle": "Subtitle",
-          "type": "AGL" | "TEQ" | "INT" | "STR" | "PHY",
-          "class": "Super" | "Extreme",
-          "rarity": "UR" | "LR" | "TUR" | "EZA",
-          "categories": ["string"],
-          "links": ["string"],
-          "leaderSkill": "string",
-          "passiveSkill": "string",
-          "stats": { "hp": number, "atk": number, "def": number }
+          "type": "AGL/TEQ/INT/STR/PHY",
+          "class": "Super/Extreme",
+          "rarity": "LR/UR",
+          "categories": ["Cat1", "Cat2"],
+          "links": ["Link1", "Link2"],
+          "leaderSkill": "Leader Skill Text",
+          "passiveSkill": "Passive Text",
+          "stats": { "hp": 10000, "atk": 10000, "def": 5000 }
         }
-      ]
-      \`\`\`
-
-      Ensure stats are high for current meta. Identify the specific version the user likely means.`,
+      ]`,
       config: {
         tools: [{ googleSearch: {} }],
+        systemInstruction: "You are a database API that returns only strictly formatted JSON arrays. Do not use markdown unless it contains the JSON.",
       }
     });
 
     const rawText = response.text || "";
-    const jsonStr = extractJsonArray(rawText);
+    const jsonStr = cleanJsonString(rawText);
     
     let characters: Character[] = [];
     try {
@@ -173,7 +174,7 @@ export const generateTeamFromInput = async (inputText: string): Promise<{ charac
         characters = parsed.map(sanitizeCharacter);
       }
     } catch (e) {
-      console.error("Failed to parse JSON. Raw:", rawText, "Extracted:", jsonStr);
+      console.error("Failed to parse JSON. Raw:", rawText, "Cleaned:", jsonStr);
     }
 
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -196,42 +197,41 @@ export const generateFullTeamFromCategory = async (category: string): Promise<{ 
     
     const response = await ai.models.generateContent({
       model,
-      contents: `Build the absolute BEST Dragon Ball Z Dokkan Battle team for the category: "${category}".
+      contents: `TASK: Create the BEST POSSIBLE Dragon Ball Z Dokkan Battle team for the "${category}" Category.
       
-      Use Google Search to find the current META units (10th Anniversary, 2024/2025 releases).
-
-      Requirements:
-      1. Return exactly 7 characters (Index 0 is Leader, Index 6 is Friend Leader).
-      2. Ensure 200% Leader Skill coverage.
-
-      IMPORTANT: Output the result as a raw JSON array inside a markdown code block. Do NOT add conversational text.
-
-      \`\`\`json
+      STEPS:
+      1. Search for the best 200% Leader for "${category}".
+      2. Select top-tier meta units (focus on 9th/10th Anniversary, WWC 2024/2025).
+      3. Construct a team of 7 units (1 Leader, 5 Subs, 1 Friend).
+      
+      OUTPUT FORMAT:
+      Return a JSON ARRAY only. Do not add intro/outro text.
+      
       [
         {
-          "id": "unique-string",
+          "id": "rand1",
           "name": "Character Name",
           "subtitle": "Subtitle",
-          "type": "AGL" | "TEQ" | "INT" | "STR" | "PHY",
-          "class": "Super" | "Extreme",
-          "rarity": "UR" | "LR" | "TUR" | "EZA",
-          "categories": ["string"],
-          "links": ["string"],
-          "leaderSkill": "string",
-          "passiveSkill": "string",
-          "stats": { "hp": number, "atk": number, "def": number }
+          "type": "AGL", 
+          "class": "Super",
+          "rarity": "LR",
+          "categories": ["${category}", "Other"],
+          "links": ["Link1", "Link2"],
+          "leaderSkill": "Description",
+          "passiveSkill": "Description",
+          "stats": { "hp": 20000, "atk": 20000, "def": 10000 }
         }
       ]
-      \`\`\`
-
-      Stats should reflect Rainbow (100%) hidden potential.`,
+      
+      Ensure valid JSON. No trailing commas.`,
       config: {
         tools: [{ googleSearch: {} }],
+        systemInstruction: "You are a JSON generator. You never output conversational text. You output strictly formatted JSON arrays.",
       }
     });
 
     const rawText = response.text || "";
-    const jsonStr = extractJsonArray(rawText);
+    const jsonStr = cleanJsonString(rawText);
     
     let characters: Character[] = [];
     try {
@@ -240,7 +240,7 @@ export const generateFullTeamFromCategory = async (category: string): Promise<{ 
         characters = parsed.map(sanitizeCharacter);
       }
     } catch (e) {
-      console.error("Failed to parse JSON. Raw:", rawText, "Extracted:", jsonStr);
+      console.error("Failed to parse JSON. Raw:", rawText, "Cleaned:", jsonStr);
     }
 
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
