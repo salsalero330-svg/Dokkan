@@ -42,35 +42,34 @@ const sanitizeCharacter = (c: any): Character => {
 const extractJsonArray = (text: string): string => {
   if (!text) return "[]";
 
-  // 1. Try to extract from Markdown code blocks first
+  // 1. Try to extract from Markdown code blocks first (Most reliable)
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   if (codeBlockMatch) {
     text = codeBlockMatch[1];
   }
 
-  // 2. Find the start of a JSON array containing objects
-  // We look for '[' followed immediately by optional whitespace and '{'
-  // This distinction is CRITICAL to avoid matching citation markers like [1], [2], [Source]
+  // 2. Find the start of a JSON array containing objects: look for "[ {" ignoring whitespace
   const startMatch = text.match(/\[\s*\{/);
   
-  if (!startMatch || typeof startMatch.index === 'undefined') {
-    // Fallback: If no strict object array found, try finding just the outer brackets 
-    // but only if it looks like it might be JSON (contains quotes/braces)
-    const firstBracket = text.indexOf('[');
+  if (startMatch && typeof startMatch.index !== 'undefined') {
+    const startIndex = startMatch.index;
     const lastBracket = text.lastIndexOf(']');
-    if (firstBracket !== -1 && lastBracket > firstBracket && text.includes('{')) {
-        return text.substring(firstBracket, lastBracket + 1);
+    if (lastBracket > startIndex) {
+        return text.substring(startIndex, lastBracket + 1);
     }
-    return "[]";
   }
 
-  const startIndex = startMatch.index;
+  // 3. Fallback: Find first '[' that is NOT a citation (e.g. avoid [1], [20])
+  // We look for '[' not followed by digits and ']'
+  const firstBracket = text.search(/\[(?!\d+\])/);
+  const lastBracket = text.lastIndexOf(']');
 
-  // 3. Find the last closing bracket ']'
-  const endIndex = text.lastIndexOf(']');
-  
-  if (endIndex > startIndex) {
-    return text.substring(startIndex, endIndex + 1);
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+      const candidate = text.substring(firstBracket, lastBracket + 1);
+      // Only return if it looks like it contains objects
+      if (candidate.includes('{') && candidate.includes('}')) {
+          return candidate;
+      }
   }
 
   return "[]";
@@ -136,35 +135,35 @@ export const generateTeamFromInput = async (inputText: string): Promise<{ charac
       model,
       contents: `The user wants to build a Dokkan Battle team with these specific characters: "${inputText}".
       
-      You have access to Google Search. Use it to find the MOST RECENT and ACCURATE details for these characters (especially if they are new releases like 10th Anniversary, WWC 2025, or recent EZAs).
+      Use Google Search to find the MOST RECENT and ACCURATE details.
       
-      Generate a JSON array of Character objects for each name mentioned.
+      IMPORTANT: Output the result as a raw JSON array inside a markdown code block.
       
-      Strict Rules:
-      1. Return ONLY the raw JSON array. Do not include markdown formatting (no \`\`\`json).
-      2. The structure must match this schema exactly for each character:
-      {
-        "id": "unique-string",
-        "name": "Character Name",
-        "subtitle": "Subtitle",
-        "type": "AGL"|"TEQ"|"INT"|"STR"|"PHY",
-        "class": "Super"|"Extreme",
-        "rarity": "UR"|"LR"|"TUR"|"EZA",
-        "categories": ["string"],
-        "links": ["string"],
-        "leaderSkill": "string",
-        "passiveSkill": "string",
-        "stats": { "hp": number, "atk": number, "def": number }
-      }
-      3. Identify the specific version the user likely means (usually the strongest/newest LR or EZA).
-      4. Ensure stats are high for current meta based on the search results.`,
+      \`\`\`json
+      [
+        {
+          "id": "unique-string",
+          "name": "Character Name",
+          "subtitle": "Subtitle",
+          "type": "AGL" | "TEQ" | "INT" | "STR" | "PHY",
+          "class": "Super" | "Extreme",
+          "rarity": "UR" | "LR" | "TUR" | "EZA",
+          "categories": ["string"],
+          "links": ["string"],
+          "leaderSkill": "string",
+          "passiveSkill": "string",
+          "stats": { "hp": number, "atk": number, "def": number }
+        }
+      ]
+      \`\`\`
+
+      Ensure stats are high for current meta. Identify the specific version the user likely means.`,
       config: {
         tools: [{ googleSearch: {} }],
       }
     });
 
     const rawText = response.text || "";
-    // Use the robust extractor
     const jsonStr = extractJsonArray(rawText);
     
     let characters: Character[] = [];
@@ -172,11 +171,9 @@ export const generateTeamFromInput = async (inputText: string): Promise<{ charac
       const parsed = JSON.parse(jsonStr);
       if (Array.isArray(parsed)) {
         characters = parsed.map(sanitizeCharacter);
-      } else {
-         console.warn("Parsed JSON is not an array:", parsed);
       }
     } catch (e) {
-      console.error("Failed to parse JSON from grounded response. Raw:", rawText, "Extracted:", jsonStr);
+      console.error("Failed to parse JSON. Raw:", rawText, "Extracted:", jsonStr);
     }
 
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
@@ -201,42 +198,39 @@ export const generateFullTeamFromCategory = async (category: string): Promise<{ 
       model,
       contents: `Build the absolute BEST Dragon Ball Z Dokkan Battle team for the category: "${category}".
       
-      You have access to Google Search. Use it to find the current META (Most Effective Tactic Available) units, including 10th Anniversary, 2024/2025 releases, and recent EZAs.
+      Use Google Search to find the current META units (10th Anniversary, 2024/2025 releases).
 
       Requirements:
-      1. Return exactly 7 characters: 
-         - Index 0: The best Leader for this category.
-         - Index 1-5: The best 5 sub-units (synergy, tanking, damage).
-         - Index 6: A Friend Leader (usually same as Index 0 or a compatible 200% lead).
-      2. Ensure the team has 200% Leader Skill coverage if possible.
-      
-      Generate a JSON array of Character objects.
-      
-      Strict Rules:
-      1. Return ONLY the raw JSON array. Do not include markdown formatting.
-      2. The structure MUST match this schema exactly:
-      {
-        "id": "unique-string",
-        "name": "Character Name",
-        "subtitle": "Subtitle",
-        "type": "AGL"|"TEQ"|"INT"|"STR"|"PHY",
-        "class": "Super"|"Extreme",
-        "rarity": "UR"|"LR"|"TUR"|"EZA",
-        "categories": ["string"],
-        "links": ["string"],
-        "leaderSkill": "string",
-        "passiveSkill": "string",
-        "stats": { "hp": number, "atk": number, "def": number }
-      }
-      3. Stats should reflect Rainbow (100%) hidden potential stats found online.
-      4. Do not include citation markers like [1] or [Source] inside the JSON.`,
+      1. Return exactly 7 characters (Index 0 is Leader, Index 6 is Friend Leader).
+      2. Ensure 200% Leader Skill coverage.
+
+      IMPORTANT: Output the result as a raw JSON array inside a markdown code block. Do NOT add conversational text.
+
+      \`\`\`json
+      [
+        {
+          "id": "unique-string",
+          "name": "Character Name",
+          "subtitle": "Subtitle",
+          "type": "AGL" | "TEQ" | "INT" | "STR" | "PHY",
+          "class": "Super" | "Extreme",
+          "rarity": "UR" | "LR" | "TUR" | "EZA",
+          "categories": ["string"],
+          "links": ["string"],
+          "leaderSkill": "string",
+          "passiveSkill": "string",
+          "stats": { "hp": number, "atk": number, "def": number }
+        }
+      ]
+      \`\`\`
+
+      Stats should reflect Rainbow (100%) hidden potential.`,
       config: {
         tools: [{ googleSearch: {} }],
       }
     });
 
     const rawText = response.text || "";
-    // Use the robust extractor
     const jsonStr = extractJsonArray(rawText);
     
     let characters: Character[] = [];
@@ -244,11 +238,9 @@ export const generateFullTeamFromCategory = async (category: string): Promise<{ 
       const parsed = JSON.parse(jsonStr);
       if (Array.isArray(parsed)) {
         characters = parsed.map(sanitizeCharacter);
-      } else {
-        console.warn("Parsed JSON is not an array:", parsed);
       }
     } catch (e) {
-      console.error("Failed to parse JSON from grounded response. Raw:", rawText, "Extracted:", jsonStr);
+      console.error("Failed to parse JSON. Raw:", rawText, "Extracted:", jsonStr);
     }
 
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
